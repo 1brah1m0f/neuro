@@ -14,23 +14,24 @@ st.set_page_config(page_title="Excel Tools", layout="centered")
 # ==========================================
 # CONSTANTS & HELPER FUNCTIONS
 # ==========================================
+# Çıxış dəyərləri Azərbaycan dilində tam böyük hərflərə dəyişdirildi
 SENTIMENT_MAP = {
-    "müsbət": "Positive", "musbet": "Positive", "müsbет": "Positive", "MÜSBƏT": "Positive",
-    "pozitiv": "Positive", "POZİTİV": "Positive", "POZITIV": "Positive",
-    "pozitif": "Positive", "POZİTİF": "Positive",
-    "positive": "Positive", "POSITIVE": "Positive", "Positive": "Positive",
-    "müspet": "Positive", "muspet": "Positive",
+    "müsbət": "POZİTİV", "musbet": "POZİTİV", "müsbет": "POZİTİV", "MÜSBƏT": "POZİTİV",
+    "pozitiv": "POZİTİV", "POZİTİV": "POZİTİV", "POZITIV": "POZİTİV",
+    "pozitif": "POZİTİV", "POZİTİF": "POZİTİV",
+    "positive": "POZİTİV", "POSITIVE": "POZİTİV", "Positive": "POZİTİV",
+    "müspet": "POZİTİV", "muspet": "POZİTİV",
     
-    "mənfi": "Negative", "menfi": "Negative", "MƏNFİ": "Negative", "MENFİ": "Negative", "MENFI": "Negative",
-    "negativ": "Negative", "NEGATİV": "Negative", "NEGATIV": "Negative",
-    "neqativ": "Negative", "NEQATİV": "Negative", "NEQATIV": "Negative",
-    "negative": "Negative", "NEGATIVE": "Negative", "Negative": "Negative",
+    "mənfi": "NEQATİV", "menfi": "NEQATİV", "MƏNFİ": "NEQATİV", "MENFİ": "NEQATİV", "MENFI": "NEQATİV",
+    "negativ": "NEQATİV", "NEGATİV": "NEQATİV", "NEGATIV": "NEQATİV",
+    "neqativ": "NEQATİV", "NEQATİV": "NEQATİV", "NEQATIV": "NEQATİV",
+    "negative": "NEQATİV", "NEGATIVE": "NEQATİV", "Negative": "NEQATİV",
     
-    "neytral": "Neutral", "NEYTRAL": "Neutral", "Neytral": "Neutral",
-    "neutral": "Neutral", "NEUTRAL": "Neutral", "Neutral": "Neutral",
-    "tərəfsiz": "Neutral", "TƏRƏFSİZ": "Neutral", "terefsiz": "Neutral", "TEREFSIZ": "Neutral",
+    "neytral": "NEYTRAL", "NEYTRAL": "NEYTRAL", "Neytral": "NEYTRAL",
+    "neutral": "NEYTRAL", "NEUTRAL": "NEYTRAL", "Neutral": "NEYTRAL",
+    "tərəfsiz": "NEYTRAL", "TƏRƏFSİZ": "NEYTRAL", "terefsiz": "NEYTRAL", "TEREFSIZ": "NEYTRAL",
     
-    "1": "Positive", "0": "Neutral", "-1": "Negative",
+    "1": "POZİTİV", "0": "NEYTRAL", "-1": "NEQATİV",
 }
 
 def _fold(s: str) -> str:
@@ -72,11 +73,11 @@ def parse_dates_robust(series: pd.Series) -> pd.Series:
     return best_parsed.dt.normalize()
 
 def translate_sentiment(x) -> str:
-    if pd.isna(x): return "Neutral"
+    if pd.isna(x): return "NEYTRAL"
     raw = str(x).strip()
-    if not raw: return "Neutral"
+    if not raw: return "NEYTRAL"
     key = re.sub(r"\s+", " ", _fold(raw))
-    return SENTIMENT_MAP.get(key, "Neutral")
+    return SENTIMENT_MAP.get(key, "NEYTRAL")
 
 def best_col(df: pd.DataFrame, candidates) -> Optional[str]:
     cols_lower = {str(c).lower(): c for c in df.columns}
@@ -109,7 +110,6 @@ def process_sheet(df: pd.DataFrame) -> pd.DataFrame:
     url_col       = best_col(df, ["url", "link", "href", "source"])
     content_col   = best_col(df, ["content", "text", "metn", "mətn", "kontent", "message", "post", "caption", "description", "body"])
     
-    # "day" axtarışa əlavə olundu
     date_col      = best_col(df, ["date", "day", "tarix", "data", "datetime", "time", "timestamp", "created", "published", "posted", "vaxt", "zaman", "created_at", "publish", "gun", "gün"])
     
     if not date_col:
@@ -128,7 +128,8 @@ def process_sheet(df: pd.DataFrame) -> pd.DataFrame:
     else:
         parsed_dates = pd.Series(pd.NaT, index=df.index)
 
-    sentiments = df[sentiment_col].map(translate_sentiment).values if sentiment_col else ["Neutral"] * len(df)
+    # Defolt dəyər də NEYTRAL oldu
+    sentiments = df[sentiment_col].map(translate_sentiment).values if sentiment_col else ["NEYTRAL"] * len(df)
 
     out = pd.DataFrame({
         "URL":       df[url_col].fillna("").astype(str).str.strip(),
@@ -145,15 +146,12 @@ def process_sheet(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 def process_excel(uploaded_bytes: bytes) -> tuple:
-    # Bütün sheet-ləri oxuyuruq
     all_sheets = pd.read_excel(io.BytesIO(uploaded_bytes), sheet_name=None, dtype=str)
     skipped, processed = [], {}
     
     for sheet_name, df in all_sheets.items():
-        # "Report" sheet-inə ümumiyyətlə toxunmuruq ki, qrafiklər silinməsin
         if sheet_name.lower() == "report":
             continue
-            
         try:
             processed[sheet_name] = process_sheet(df)
         except ValueError as e:
@@ -162,16 +160,11 @@ def process_excel(uploaded_bytes: bytes) -> tuple:
     if not processed:
         raise ValueError("Heç bir sheet emal oluna bilmədi.\n" + "\n".join(skipped))
 
-    # YENİLİK BURADADIR: 
-    # Orijinal Excel faylını olduğu kimi (qrafiklərlə birgə) buferə kopyalayırıq
     buf = io.BytesIO(uploaded_bytes)
     
-    # Yeni fayl yaratmaq əvəzinə, orijinal faylı redaktə edirik (mode="a")
     with pd.ExcelWriter(buf, engine="openpyxl", mode="a", if_sheet_exists="replace", datetime_format="m/d/yyyy") as writer:
         for sheet_name, cleaned in processed.items():
-            # Yalnız emal olunmuş sheet-lərin məlumatlarını yeniləyirik (replace)
             cleaned.to_excel(writer, index=False, sheet_name=sheet_name)
-            
             ws = writer.sheets[sheet_name]
             header = {cell.value: cell.column for cell in ws[1]}
             url_col_idx  = header.get("URL")
@@ -198,9 +191,6 @@ def process_excel(uploaded_bytes: bytes) -> tuple:
 tool = st.sidebar.radio("Alət seç:", ["Excel Sheet Combiner", "Excel Cleaner"])
 st.title(tool)
 
-# ------------------------------------------
-# TOOL 1: Excel Sheet Combiner
-# ------------------------------------------
 if tool == "Excel Sheet Combiner":
     uploaded_files = st.file_uploader("Upload Excel files", type="xlsx", accept_multiple_files=True)
     sheet_names_input = st.text_input("Enter comma-separated sheet names to combine", "Tiktok,Facebook,News,YouTube,Linkedin,Twitter,Instagram")
@@ -250,9 +240,6 @@ if tool == "Excel Sheet Combiner":
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 )
 
-# ------------------------------------------
-# TOOL 2: Excel Cleaner
-# ------------------------------------------
 else:
     st.write("Excel yüklə → bütün sheet-lər ayrı-ayrı emal olunacaq. Hər sheet-də çıxış: URL, Content, Date (M/D/YYYY), Sentiment.")
     uploaded = st.file_uploader("Excel faylını seç (.xlsx)", type=["xlsx"])
