@@ -1,6 +1,7 @@
 import io
 import re
 import unicodedata
+from datetime import datetime
 from typing import Optional
 import pandas as pd
 import streamlit as st
@@ -80,9 +81,10 @@ def _guess_date_col(df: pd.DataFrame, exclude_cols=None) -> Optional[str]:
             vals = df[col].dropna().astype(str).str.strip()
             if vals.empty:
                 continue
-            sample = vals.head(50).map(normalize_date_text)
-            parsed = pd.to_datetime(sample, errors="coerce", dayfirst=True)
-            score = parsed.notna().sum()
+            sample = vals.head(50)
+            p1 = pd.to_datetime(sample, errors="coerce", dayfirst=True)
+            p2 = pd.to_datetime(sample.map(normalize_date_text), errors="coerce", dayfirst=True)
+            score = max(p1.notna().sum(), p2.notna().sum())
             if score > best_score:
                 best_score = score
                 best = col
@@ -124,14 +126,23 @@ def process_sheet(df: pd.DataFrame) -> pd.DataFrame:
 
     # Date tapılmasa boş burax
     if date_col:
-        normalized = df[date_col].map(normalize_date_text)
-        parsed = pd.to_datetime(normalized, errors="coerce", dayfirst=True)
-        if parsed.isna().mean() > 0.5:
-            alt = pd.to_datetime(normalized, errors="coerce", yearfirst=True)
-            if alt.isna().mean() < parsed.isna().mean():
-                parsed = alt
+        raw_vals = df[date_col].fillna("").astype(str).str.strip()
+        # ISO format (YYYY-MM-DD, Excel datetime) → dayfirst=False
+        parsed = pd.to_datetime(raw_vals, errors="coerce", dayfirst=False)
+        # DD.MM.YYYY, DD/MM/YYYY → dayfirst=True
+        alt = pd.to_datetime(raw_vals, errors="coerce", dayfirst=True)
+        if alt.notna().sum() > parsed.notna().sum():
+            parsed = alt
+        # Normalize edib yenə cəhd et
+        if parsed.isna().mean() > 0.4:
+            normalized = raw_vals.map(normalize_date_text)
+            p2 = pd.to_datetime(normalized, errors="coerce", dayfirst=False)
+            p3 = pd.to_datetime(normalized, errors="coerce", dayfirst=True)
+            best_norm = p2 if p2.notna().sum() >= p3.notna().sum() else p3
+            if best_norm.notna().sum() > parsed.notna().sum():
+                parsed = best_norm
     else:
-        parsed = pd.Series([pd.NaT] * len(df))
+        parsed = pd.Series(pd.NaT, index=df.index)
 
     # Sentiment tapılmasa Neutral yaz
     if sentiment_col:
@@ -142,7 +153,7 @@ def process_sheet(df: pd.DataFrame) -> pd.DataFrame:
     out = pd.DataFrame({
         "URL":       df[url_col].fillna("").astype(str).str.strip(),
         "Content":   df[content_col].fillna("").astype(str).str.strip(),
-        "Date":      parsed,
+        "Date":      parsed.dt.strftime("%Y-%m-%d").where(parsed.notna(), ""),
         "Sentiment": sentiments,
         "_sort":     parsed.values,
     })
@@ -202,7 +213,13 @@ def process_excel(uploaded_bytes: bytes) -> tuple:
                         cell.font = hyperlink_font
                 if date_col_idx:
                     dcell = row[date_col_idx - 1]
-                    dcell.number_format = "YYYY-MM-DD"
+                    val = str(dcell.value or "").strip()
+                    if val:
+                        try:
+                            dcell.value = datetime.strptime(val, "%Y-%m-%d")
+                            dcell.number_format = "YYYY-MM-DD"
+                        except ValueError:
+                            pass
     return buf.getvalue(), skipped
 
 
