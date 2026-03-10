@@ -1,5 +1,6 @@
 import io
 import re
+import unicodedata
 from typing import Optional
 import pandas as pd
 import streamlit as st
@@ -35,13 +36,9 @@ SENTIMENT_MAP = {
 }
 
 def _fold(s: str) -> str:
-    return (
-        s.lower()
-         .replace("ı", "i").replace("ə", "e").replace("ş", "s").replace("ç", "c")
-         .replace("ö", "o").replace("ü", "u").replace("ğ", "g")
-         .replace("İ", "i").replace("Ə", "e").replace("Ş", "s").replace("Ç", "c")
-         .replace("Ö", "o").replace("Ü", "u").replace("Ğ", "g")
-    )
+    s = unicodedata.normalize("NFKD", s.lower())
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return s.replace("ı", "i").replace("ə", "e")
 
 def normalize_date_text(x) -> str:
     if pd.isna(x):
@@ -85,6 +82,7 @@ def process_sheet(df: pd.DataFrame) -> pd.DataFrame:
                                    "publish", "gun", "gün"])
     sentiment_col = best_col(df, ["sentiment", "hiss", "emosiya", "rating",
                                    "tone", "mood", "label", "class"])
+    measures_col  = best_col(df, ["measures", "tədbir", "action"])
 
     # URL və Content tapılmasa → sheet-i skip et
     if not url_col and not content_col:
@@ -122,6 +120,8 @@ def process_sheet(df: pd.DataFrame) -> pd.DataFrame:
         "Sentiment": sentiments,
         "_sort":     parsed.values,
     })
+    if measures_col:
+        out["Measures taken"] = df[measures_col].fillna("").astype(str).str.strip()
 
     out = (
         out.sort_values("_sort", ascending=True, na_position="last")
@@ -138,19 +138,26 @@ def process_excel(uploaded_bytes: bytes) -> tuple:
 
     skipped = []
     processed = {}
+    passthrough = {}
     for sheet_name, df in all_sheets.items():
+        if sheet_name.lower() == "report":
+            passthrough[sheet_name] = df
+            continue
         try:
             processed[sheet_name] = process_sheet(df)
         except ValueError as e:
             skipped.append(f"⚠️ Sheet '{sheet_name}' skip olundu: {e}")
 
-    if not processed:
+    if not processed and not passthrough:
         raise ValueError(
             "Heç bir sheet emal oluna bilmədi.\n" + "\n".join(skipped)
         )
 
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl", datetime_format="YYYY-MM-DD") as writer:
+        for sheet_name, df in passthrough.items():
+            df.to_excel(writer, index=False, sheet_name=sheet_name)
+
         for sheet_name, cleaned in processed.items():
             cleaned.to_excel(writer, index=False, sheet_name=sheet_name)
 
