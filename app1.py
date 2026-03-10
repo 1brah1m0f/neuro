@@ -142,7 +142,7 @@ def process_sheet(df: pd.DataFrame) -> pd.DataFrame:
     out = pd.DataFrame({
         "URL":       df[url_col].fillna("").astype(str).str.strip(),
         "Content":   df[content_col].fillna("").astype(str).str.strip(),
-        "Date":      parsed.dt.date.where(parsed.notna(), None),
+        "Date":      parsed,
         "Sentiment": sentiments,
         "_sort":     parsed.values,
     })
