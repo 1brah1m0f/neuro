@@ -76,33 +76,50 @@ def process_sheet(df: pd.DataFrame) -> pd.DataFrame:
     """Clean a single sheet DataFrame. Returns cleaned DataFrame."""
     df = df.reset_index(drop=True)
 
-    url_col       = best_col(df, ["url", "link"])
-    content_col   = best_col(df, ["content", "text", "metn", "mətn", "kontent"])
-    date_col      = best_col(df, ["date", "tarix", "data", "datetime"])
-    sentiment_col = best_col(df, ["sentiment", "hiss", "emosiya", "rating"])
+    url_col       = best_col(df, ["url", "link", "href", "source"])
+    content_col   = best_col(df, ["content", "text", "metn", "mətn", "kontent",
+                                   "message", "post", "caption", "description", "body"])
+    date_col      = best_col(df, ["date", "tarix", "data", "datetime",
+                                   "time", "timestamp", "created", "published",
+                                   "posted", "vaxt", "zaman", "created_at",
+                                   "publish", "gun", "gün"])
+    sentiment_col = best_col(df, ["sentiment", "hiss", "emosiya", "rating",
+                                   "tone", "mood", "label", "class"])
 
-    missing = []
-    if not url_col:       missing.append("URL")
-    if not content_col:   missing.append("Content")
-    if not date_col:      missing.append("Date/Tarix")
-    if not sentiment_col: missing.append("Sentiment")
-    if missing:
-        raise ValueError("Bu sütunları tapa bilmədim: " + ", ".join(missing))
+    # URL və Content tapılmasa → sheet-i skip et
+    if not url_col and not content_col:
+        raise ValueError(
+            f"URL və Content sütunları tapılmadı. "
+            f"Mövcud sütunlar: {list(df.columns)}"
+        )
 
-    normalized = df[date_col].map(normalize_date_text)
-    parsed = pd.to_datetime(normalized, errors="coerce", dayfirst=True)
-    if parsed.isna().mean() > 0.5:
-        alt = pd.to_datetime(normalized, errors="coerce", yearfirst=True)
-        if alt.isna().mean() < parsed.isna().mean():
-            parsed = alt
+    if not url_col:
+        url_col = content_col
+    if not content_col:
+        content_col = url_col
 
-    date_strings = parsed.dt.strftime("%Y-%m-%d").where(parsed.notna(), "")
+    # Date tapılmasa boş burax
+    if date_col:
+        normalized = df[date_col].map(normalize_date_text)
+        parsed = pd.to_datetime(normalized, errors="coerce", dayfirst=True)
+        if parsed.isna().mean() > 0.5:
+            alt = pd.to_datetime(normalized, errors="coerce", yearfirst=True)
+            if alt.isna().mean() < parsed.isna().mean():
+                parsed = alt
+    else:
+        parsed = pd.Series([pd.NaT] * len(df))
+
+    # Sentiment tapılmasa Neutral yaz
+    if sentiment_col:
+        sentiments = df[sentiment_col].map(translate_sentiment).values
+    else:
+        sentiments = ["Neutral"] * len(df)
 
     out = pd.DataFrame({
         "URL":       df[url_col].fillna("").astype(str).str.strip(),
         "Content":   df[content_col].fillna("").astype(str).str.strip(),
-        "Date":      parsed.dt.date.where(parsed.notna(), None),  # real date objects
-        "Sentiment": df[sentiment_col].map(translate_sentiment).values,
+        "Date":      parsed.dt.date.where(parsed.notna(), None),
+        "Sentiment": sentiments,
         "_sort":     parsed.values,
     })
 
@@ -113,47 +130,47 @@ def process_sheet(df: pd.DataFrame) -> pd.DataFrame:
     )
     return out
 
-def process_excel(uploaded_bytes: bytes) -> bytes:
+def process_excel(uploaded_bytes: bytes) -> tuple:
     """Read every sheet, process each separately, write to output with same sheet names."""
     all_sheets: dict = pd.read_excel(
         io.BytesIO(uploaded_bytes), sheet_name=None, dtype=str
     )
 
+    skipped = []
+    processed = {}
+    for sheet_name, df in all_sheets.items():
+        try:
+            processed[sheet_name] = process_sheet(df)
+        except ValueError as e:
+            skipped.append(f"⚠️ Sheet '{sheet_name}' skip olundu: {e}")
+
+    if not processed:
+        raise ValueError(
+            "Heç bir sheet emal oluna bilmədi.\n" + "\n".join(skipped)
+        )
+
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl", datetime_format="YYYY-MM-DD") as writer:
-        errors = []
-        written = 0
-        for sheet_name, df in all_sheets.items():
-            try:
-                cleaned = process_sheet(df)
-                cleaned.to_excel(writer, index=False, sheet_name=sheet_name)
+        for sheet_name, cleaned in processed.items():
+            cleaned.to_excel(writer, index=False, sheet_name=sheet_name)
 
-                ws = writer.sheets[sheet_name]
+            ws = writer.sheets[sheet_name]
+            header = {cell.value: cell.column for cell in ws[1]}
+            url_col_idx  = header.get("URL")
+            date_col_idx = header.get("Date")
+            hyperlink_font = Font(color="0563C1", underline="single")
 
-                # Find URL and Date column letters (header is row 1)
-                header = {cell.value: cell.column for cell in ws[1]}
-                url_col_idx  = header.get("URL")
-                date_col_idx = header.get("Date")
-
-                hyperlink_font = Font(color="0563C1", underline="single")
-
-                for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
-                    if url_col_idx:
-                        cell = row[url_col_idx - 1]
-                        url_val = str(cell.value or "").strip()
-                        if url_val.startswith("http"):
-                            cell.hyperlink = url_val
-                            cell.font = hyperlink_font
-                    if date_col_idx:
-                        dcell = row[date_col_idx - 1]
-                        dcell.number_format = "YYYY-MM-DD"
-
-                written += 1
-            except ValueError as e:
-                errors.append(f"Sheet '{sheet_name}': {e}")
-        if written == 0:
-            raise ValueError("Heç bir sheet eşlal oluna bilmədi:\n" + "\n".join(errors))
-    return buf.getvalue()
+            for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+                if url_col_idx:
+                    cell = row[url_col_idx - 1]
+                    url_val = str(cell.value or "").strip()
+                    if url_val.startswith("http"):
+                        cell.hyperlink = url_val
+                        cell.font = hyperlink_font
+                if date_col_idx:
+                    dcell = row[date_col_idx - 1]
+                    dcell.number_format = "YYYY-MM-DD"
+    return buf.getvalue(), skipped
 
 
 st.title("Excel Cleaner")
@@ -172,7 +189,9 @@ if run_btn:
         st.error("Əvvəl Excel faylını yüklə.")
     else:
         try:
-            result = process_excel(uploaded.getvalue())
+            result, skipped = process_excel(uploaded.getvalue())
+            for msg in skipped:
+                st.warning(msg)
             st.success("Hazırdır ✅")
             st.download_button(
                 label="Cleaned Excel-i yüklə",
