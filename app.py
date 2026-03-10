@@ -55,21 +55,24 @@ if tool == "Excel Sheet Combiner":
                 except Exception as e:
                     st.error(f"Error processing file {uploaded_file.name}: {e}")
 
-            output = BytesIO()
-            with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                for sheet, data in combined_data.items():
-                    if data:
-                        combined_df = pd.concat(data, ignore_index=True)
-                        combined_df.to_excel(
-                            writer, sheet_name=sheet.capitalize(), index=False
-                        )
-                        st.success(f"Sheet '{sheet}' combined successfully.")
-                    else:
-                        st.warning(f"No data for sheet '{sheet}'.")
+            has_data = any(combined_data[s] for s in sheet_names)
+            if not has_data:
+                st.error("Heç bir sheet-də data tapılmadı.")
+            else:
+                output = BytesIO()
+                with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                    for sheet, data in combined_data.items():
+                        if data:
+                            combined_df = pd.concat(data, ignore_index=True)
+                            combined_df.to_excel(
+                                writer, sheet_name=sheet.capitalize(), index=False
+                            )
+                            st.success(f"Sheet '{sheet}' combined successfully.")
+                        else:
+                            st.warning(f"No data for sheet '{sheet}'.")
 
-            output.seek(0)
-            st.download_button(
-                label="Download Combined Excel File",
+                output.seek(0)
+    label="Download Combined Excel File",
                 data=output,
                 file_name="combined_data.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -176,40 +179,40 @@ else:
         all_sheets = pd.read_excel(
             io.BytesIO(uploaded_bytes), sheet_name=None, dtype=str
         )
+        errors = []
+        processed = {}
+        for sheet_name, df in all_sheets.items():
+            try:
+                processed[sheet_name] = process_sheet(df)
+            except ValueError as e:
+                errors.append(f"Sheet '{sheet_name}': {e}")
+
+        if not processed:
+            raise ValueError(
+                "Heç bir sheet eşlal oluna bilmədi:\n" + "\n".join(errors)
+            )
+
         buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine="openpyxl", datetime_format="YYYY-MM-DD") as writer:
-            errors = []
-            written = 0
-            for sheet_name, df in all_sheets.items():
-                try:
-                    cleaned = process_sheet(df)
-                    cleaned.to_excel(writer, index=False, sheet_name=sheet_name)
+            for sheet_name, cleaned in processed.items():
+                cleaned.to_excel(writer, index=False, sheet_name=sheet_name)
 
-                    ws = writer.sheets[sheet_name]
-                    header = {cell.value: cell.column for cell in ws[1]}
-                    url_col_idx  = header.get("URL")
-                    date_col_idx = header.get("Date")
-                    hyperlink_font = Font(color="0563C1", underline="single")
+                ws = writer.sheets[sheet_name]
+                header = {cell.value: cell.column for cell in ws[1]}
+                url_col_idx  = header.get("URL")
+                date_col_idx = header.get("Date")
+                hyperlink_font = Font(color="0563C1", underline="single")
 
-                    for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
-                        if url_col_idx:
-                            cell = row[url_col_idx - 1]
-                            url_val = str(cell.value or "").strip()
-                            if url_val.startswith("http"):
-                                cell.hyperlink = url_val
-                                cell.font = hyperlink_font
-                        if date_col_idx:
-                            dcell = row[date_col_idx - 1]
-                            dcell.number_format = "YYYY-MM-DD"
-
-                    written += 1
-                except ValueError as e:
-                    errors.append(f"Sheet '{sheet_name}': {e}")
-
-            if written == 0:
-                raise ValueError(
-                    "Heç bir sheet eşlal oluna bilmədi:\n" + "\n".join(errors)
-                )
+                for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+                    if url_col_idx:
+                        cell = row[url_col_idx - 1]
+                        url_val = str(cell.value or "").strip()
+                        if url_val.startswith("http"):
+                            cell.hyperlink = url_val
+                            cell.font = hyperlink_font
+                    if date_col_idx:
+                        dcell = row[date_col_idx - 1]
+                        dcell.number_format = "YYYY-MM-DD"
         return buf.getvalue()
 
     st.write(
