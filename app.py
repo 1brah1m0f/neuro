@@ -48,10 +48,7 @@ def normalize_date_text(x) -> str:
     return s.strip('"').strip("'").strip()
 
 def parse_dates_robust(series: pd.Series) -> pd.Series:
-    """Robust tarix oxuma funksiyası (Excel nömrələrini və standart stringləri nəzərə alır)"""
     raw = series.fillna("").astype(str).str.strip()
-    
-    # Excel rəqəmsal tarixlərini yoxla (məs: 44196)
     is_numeric = raw.str.isnumeric() & (raw.str.len() >= 4)
     
     parsed_dayfirst = pd.to_datetime(raw, errors="coerce", dayfirst=True)
@@ -68,12 +65,10 @@ def parse_dates_robust(series: pd.Series) -> pd.Series:
         if best_norm.notna().sum() > best_parsed.notna().sum():
             best_parsed = best_norm
 
-    # 5 rəqəmli Excel tarixlərini çevir
     if is_numeric.any():
         numeric_dates = pd.to_datetime(raw[is_numeric].astype(float), unit='D', origin='1899-12-30', errors='coerce')
         best_parsed.loc[is_numeric] = numeric_dates
 
-    # Saatı silib ancaq tarixi (YYYY-MM-DD) qaytarır
     return best_parsed.dt.normalize()
 
 def translate_sentiment(x) -> str:
@@ -113,7 +108,9 @@ def process_sheet(df: pd.DataFrame) -> pd.DataFrame:
     df = df.reset_index(drop=True)
     url_col       = best_col(df, ["url", "link", "href", "source"])
     content_col   = best_col(df, ["content", "text", "metn", "mətn", "kontent", "message", "post", "caption", "description", "body"])
-    date_col      = best_col(df, ["date", "tarix", "data", "datetime", "time", "timestamp", "created", "published", "posted", "vaxt", "zaman", "created_at", "publish", "gun", "gün"])
+    
+    # "day" axtarışa əlavə olundu
+    date_col      = best_col(df, ["date", "day", "tarix", "data", "datetime", "time", "timestamp", "created", "published", "posted", "vaxt", "zaman", "created_at", "publish", "gun", "gün"])
     
     if not date_col:
         date_col = _guess_date_col(df, exclude_cols=[url_col or "", content_col or ""])
@@ -148,28 +145,33 @@ def process_sheet(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 def process_excel(uploaded_bytes: bytes) -> tuple:
+    # Bütün sheet-ləri oxuyuruq
     all_sheets = pd.read_excel(io.BytesIO(uploaded_bytes), sheet_name=None, dtype=str)
-    skipped, processed, passthrough = [], {}, {}
+    skipped, processed = [], {}
     
     for sheet_name, df in all_sheets.items():
+        # "Report" sheet-inə ümumiyyətlə toxunmuruq ki, qrafiklər silinməsin
         if sheet_name.lower() == "report":
-            passthrough[sheet_name] = df
             continue
+            
         try:
             processed[sheet_name] = process_sheet(df)
         except ValueError as e:
             skipped.append(f"⚠️ Sheet '{sheet_name}' skip olundu: {e}")
 
-    if not processed and not passthrough:
+    if not processed:
         raise ValueError("Heç bir sheet emal oluna bilmədi.\n" + "\n".join(skipped))
 
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl", datetime_format="YYYY-MM-DD") as writer:
-        for sheet_name, df in passthrough.items():
-            df.to_excel(writer, index=False, sheet_name=sheet_name)
-
+    # YENİLİK BURADADIR: 
+    # Orijinal Excel faylını olduğu kimi (qrafiklərlə birgə) buferə kopyalayırıq
+    buf = io.BytesIO(uploaded_bytes)
+    
+    # Yeni fayl yaratmaq əvəzinə, orijinal faylı redaktə edirik (mode="a")
+    with pd.ExcelWriter(buf, engine="openpyxl", mode="a", if_sheet_exists="replace", datetime_format="m/d/yyyy") as writer:
         for sheet_name, cleaned in processed.items():
+            # Yalnız emal olunmuş sheet-lərin məlumatlarını yeniləyirik (replace)
             cleaned.to_excel(writer, index=False, sheet_name=sheet_name)
+            
             ws = writer.sheets[sheet_name]
             header = {cell.value: cell.column for cell in ws[1]}
             url_col_idx  = header.get("URL")
@@ -186,7 +188,8 @@ def process_excel(uploaded_bytes: bytes) -> tuple:
                 if date_col_idx:
                     dcell = row[date_col_idx - 1]
                     if dcell.value is not None:
-                        dcell.number_format = "YYYY-MM-DD"
+                        dcell.number_format = "m/d/yyyy"
+                        
     return buf.getvalue(), skipped
 
 # ==========================================
@@ -251,7 +254,7 @@ if tool == "Excel Sheet Combiner":
 # TOOL 2: Excel Cleaner
 # ------------------------------------------
 else:
-    st.write("Excel yüklə → bütün sheet-lər ayrı-ayrı emal olunacaq. Hər sheet-də çıxış: URL, Content, Date (YYYY-MM-DD), Sentiment.")
+    st.write("Excel yüklə → bütün sheet-lər ayrı-ayrı emal olunacaq. Hər sheet-də çıxış: URL, Content, Date (M/D/YYYY), Sentiment.")
     uploaded = st.file_uploader("Excel faylını seç (.xlsx)", type=["xlsx"])
 
     col1, col2 = st.columns(2)
