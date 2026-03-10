@@ -72,11 +72,12 @@ if tool == "Excel Sheet Combiner":
                             st.warning(f"No data for sheet '{sheet}'.")
 
                 output.seek(0)
-    label="Download Combined Excel File",
-                data=output,
-                file_name="combined_data.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
+                st.download_button(
+                    label="Download Combined Excel File",
+                    data=output,
+                    file_name="combined_data.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
 
 # ─────────────────────────────────────────────
 # TOOL 2 – Excel Cleaner
