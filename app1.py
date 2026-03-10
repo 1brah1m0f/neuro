@@ -69,6 +69,29 @@ def best_col(df: pd.DataFrame, candidates) -> Optional[str]:
                 return original
     return None
 
+def _guess_date_col(df: pd.DataFrame, exclude_cols=None) -> Optional[str]:
+    """Try every column; return the one with the most parseable dates."""
+    exclude = set(c.lower() for c in (exclude_cols or []))
+    best, best_score = None, 0
+    for col in df.columns:
+        if col.lower() in exclude:
+            continue
+        try:
+            vals = df[col].dropna().astype(str).str.strip()
+            if vals.empty:
+                continue
+            sample = vals.head(50).map(normalize_date_text)
+            parsed = pd.to_datetime(sample, errors="coerce", dayfirst=True)
+            score = parsed.notna().sum()
+            if score > best_score:
+                best_score = score
+                best = col
+        except Exception:
+            continue
+    if best and best_score >= max(2, len(df.head(50)) * 0.3):
+        return best
+    return None
+
 def process_sheet(df: pd.DataFrame) -> pd.DataFrame:
     """Clean a single sheet DataFrame. Returns cleaned DataFrame."""
     df = df.reset_index(drop=True)
@@ -80,6 +103,9 @@ def process_sheet(df: pd.DataFrame) -> pd.DataFrame:
                                    "time", "timestamp", "created", "published",
                                    "posted", "vaxt", "zaman", "created_at",
                                    "publish", "gun", "gün"])
+    if not date_col:
+        date_col = _guess_date_col(df, exclude_cols=[
+            url_col or "", content_col or ""])
     sentiment_col = best_col(df, ["sentiment", "hiss", "emosiya", "rating",
                                    "tone", "mood", "label", "class"])
     measures_col  = best_col(df, ["measures", "tədbir", "action"])
